@@ -58,8 +58,12 @@ class LidarCamera:
                 cv2.destroyAllWindows()
                 break
         self.pipeline.stop()
-    def stream_segment_mask(self,threshold):
+    def stream_segment_mask(self,threshold,save_path=None):
         self.pipeline.start()
+        if save_path is not None:
+                # fourcc = cv2.CV_FOURCC(*'XVID')  # cv2.VideoWriter_fourcc() does not exist
+                print(self.color_shape)
+                video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'MJPG'), 30, self.color_shape,True)
         while True:
             frames = self.pipeline.wait_for_frames()
             frames = self.align.process(frames)
@@ -81,9 +85,13 @@ class LidarCamera:
             cv2.namedWindow('Object Color', cv2.WINDOW_AUTOSIZE)
             # print(stacked_mask.shape)
             cv2.imshow('Object Color', color_image)
+            if save_path is not None:
+                video_writer.write(color_image)
             key = cv2.waitKey(1)
             if key & 0xFF == ord('q') or key == 27:
                 cv2.destroyAllWindows()
+                if save_path is not None:
+                    video_writer.release()
                 break
         self.pipeline.stop()
     def show_frame(self):
@@ -96,6 +104,7 @@ class LidarCamera:
         plt.show()
     def calibrate_plane(self):
         depth_image,color_image = self.get_frame()
+        self.color_shape = color_image.shape[0:2]
         img_rows,img_cols = depth_image.shape
         xyz = []
         G_lstsq = []
@@ -127,21 +136,3 @@ class LidarCamera:
         # mask = np.where((depth_image<(self.floor_plane_img-threshold) | (depth_image <= 0)),0,1)
         return mask.astype(int)
         
-
-
-        
-
-
-    
-
-
-def fitPlaneLTSQ(XYZ):
-    (rows, cols) = XYZ.shape
-    G = np.ones((rows, 3))
-    G[:, 0] = XYZ[:, 0]  #X
-    G[:, 1] = XYZ[:, 1]  #Y
-    Z = XYZ[:, 2]
-    C,resid,rank,s = np.linalg.lstsq(G, Z)
-    Z_calc  = C[0]*G[:, 0] + C[1]*G[:, 1] + C[2]
-    img_plane = np.c_[G[:, 0],G[:, 1],Z_calc]
-    return C,img_plane
