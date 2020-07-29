@@ -1,0 +1,9 @@
+from modules.camera_tools import  LidarCamera
+from matplotlib import pyplot as plt
+
+camera = LidarCamera(decimate=False)
+# camera.show_stream()
+camera.calibrate_plane()
+proceed = input('camera calibrated! place object on scene and press ENTER to continue')
+mask = camera.stream_segment_mask(threshold=25)
+
