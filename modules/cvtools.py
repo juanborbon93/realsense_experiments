@@ -2,28 +2,115 @@ import cv2
 import numpy as np
 
 class frame_objects:
-    def __init__(self,area_diff_weight=1,dist_diff_weight=1):
+    """keeps track of objects as they move through frame
+    """    
+    def __init__(self,area_diff_weight:float=1,dist_diff_weight:float=1,min_area=0):
+        """
+        Args:
+            area_diff_weight (float, optional): scalar weight for area diff when calculating contour matches. Defaults to 1.
+            dist_diff_weight (float, optional): scalar weight for centroid distance diff when calculating contour matches. Defaults to 1.
+            min_area (float,optional): threshold to filter out contours that are too small.
+        """        
         self.objects = []
         self.area_diff_weight = area_diff_weight
         self.dist_diff_weight = dist_diff_weight
-    def process_frame(color,depth_mask):
+        self.min_area = min_area
+    def process_frame(color:np.ndarray,depth_mask:np.ndarray):
+        """ will find contours and match them to existing objects (if any)
+
+        Args:
+            color (np.ndarray): color image array (width,height,3)
+            depth_mask (np.ndarray): depth map (width,height)
+
+        Returns:
+            [(np.ndarray)]: color image overlayed with object bounding boxes, centroids, and trajectories
+        """             
         im2, contours, hierarchy = cv2.findContours(depth_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if len(contours)>0:
             if len(self.objects) == 0:
                 self.objects = [img_object(cnt) for c in contours]
             else:
+                # todo: condition for clearing objects that have left the screen
                 distances  = np.zeros((len(contours),len(self.objects)))
                 for i,cnt in enumerate(contours):
                     for j,obj in enumerate(self.objects):
                         centroid_dist,area_percent_diff = obj.calculate_distance(cnt)
                         distances[i][j] = self.area_diff_weight*area_percent_diff + self.dist_diff_weight*centroid_dist
-                    #todo: assign detected contours to existing objects
-                    #todo: eliminate objects that move out of the frame
+                filtered_distances,kept_cnts,unmatched_cnts = self.filter_cnts(distances)
+                matched_objects = self.assign_contours(filtered_distances)
+                for cnt_index,obj_index in zip(kept_cnts,matched_objects):
+                    # if distances[cnt_index][obj_index] < SOME_DISTANCE:
+                    self.objects[obj_index].update(contours[cnt_index])
+                for new_cnt_index in unmatched_cnts: 
+                    new_cnt = contours[new_cnt_index]
+                    M = np2.moments(new_cnt)
+                    if M["m00"]>self.min_area:
+                        self.objects.append(img_object(new_cnt))
         return self.render_color_output(color)
-    def render_color_output(self,color):
-        # draw bboxes and paths for all objects in frame
-        return rendered_color
-        
+    @staticmethod
+    def render_color_output(self,color:np.ndarray):
+        """ overlays bounding boxes and trajectories
+
+        Args:
+            color (np.ndarray): color image
+
+        Returns:
+            [(np.ndarray)]: rendered color image
+        """        
+        for obj in self.objects:
+            drawing_color = (255,0,0)
+            line_thickness = 2
+            cv2.rectangle(
+                color, 
+                (int(obj.bbox[0]), int(obj.bbox[1])), 
+                (int(obj.bbox[0]+obj.bbox[2]),int(obj.bbox[1]+obj.bbox[3])), 
+                drawing_color, line_thickness)
+            path_length = len(obj.path)
+            if path_length>2:
+                for i in range(1,path_length):
+                    cv2.line(color,obj.path[i-1],obj.path[i],drawing_color,line_thickness)
+        return color
+    @staticmethod
+    def find_repeats(l):
+        index_set = set()
+        repeat_set = set()
+        for i in l:
+            if i not in index_set:
+                index_set.add(i)
+            else:
+                repeat_set.add(i)
+        return repeat_set
+    @classmethod
+    def assign_contours(cls,m):
+        object_candidates = np.zeros((m.shape[0],),dtype=np.int8)
+        for i,cnt_dists in enumerate(m):
+            max_index = np.where(cnt_dists==np.amin(cnt_dists))[0][0]
+            object_candidates[i]=max_index
+        repeat_object_indices = cls.find_repeats(object_candidates)
+        if len(repeat_object_indices)==0:
+            return object_candidates
+        else:  
+            for r in repeat_object_indices:
+                repeat_contour_indices = np.where(object_candidates==r)[0]
+                cnts_to_arbitrate = m[repeat_contour_indices,r]
+                arbitrated_minimum = np.where(cnts_to_arbitrate==np.amin(cnts_to_arbitrate))[0][0]
+                row_filter = [i for i in range(m.shape[0]) if i != arbitrated_minimum]
+                m[row_filter,r] = np.amax(m)+1
+                return assign_contours(m)
+    @staticmethod
+    def filter_cnts(m):
+        shape = m.shape
+        if shape[0]==shape[1]:
+            return m
+        else:
+            rows_deleted = []
+            while m.shape[0]>m.shape[1]:
+                min_row_vals = np.amin(m,0)
+                max_min_val = np.where(min_row_vals==np.amax(min_row_vals))
+                rows_deleted.append(max_min_val[0][0])
+                m = np.delete(m,max_min_val,0)
+            rows_kept = [i for i in range(shape[0]) if i not in rows_deleted]
+            return m,rows_kept,rows_deleted
         
 
 class img_object:
@@ -34,11 +121,14 @@ class img_object:
         self.contour = contour
         self.path = []
         self.process_contour(self.contour)
-    def process_contour(self,contour):
+    def process_contour(self,cnt):
         """
         takes contour and returns object bounding box and centroid
         """        
-        # todo: calculate from contour
+        bbox = cv2.boundingRect(cnt)
+        M = cv2.moments(cnt)
+        area = M["m00"]
+        centroid = (int(M["m10"]/area),int(M["m01"]/area))
         return centroid,bbox,area
     def update(self,contour)
         centroid,bbox,area = self.process_contour(contour)
