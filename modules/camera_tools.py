@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pyrealsense2 as rs
 import cv2
+from .cvtools import frame_objects
 
 class LidarCamera:
     def __init__(self,floor_plane=None,fps=30,decimate=False):
@@ -21,6 +22,7 @@ class LidarCamera:
         self.floor_plane = floor_plane
         align_to = rs.stream.color
         self.align = rs.align(align_to)
+        self.frame_objects = frame_objects(0,1,250)
     def get_frame(self):
         self.pipeline.start()
         frames = self.pipeline.wait_for_frames()
@@ -63,7 +65,8 @@ class LidarCamera:
         if save_path is not None:
                 # fourcc = cv2.CV_FOURCC(*'XVID')  # cv2.VideoWriter_fourcc() does not exist
                 print(self.color_shape)
-                video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'MJPG'), 30, self.color_shape,True)
+                video_shape = (self.color_shape[1],self.color_shape[0])
+                video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'XVID'), 30,video_shape,True)
         while True:
             frames = self.pipeline.wait_for_frames()
             frames = self.align.process(frames)
@@ -78,13 +81,42 @@ class LidarCamera:
             mask = mask.astype(np.uint8)
             depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(mask, alpha=0.5), cv2.COLORMAP_JET)
             display_img = np.hstack((depth_colormap,color_image))
-            # stacked_mask = np.dstack((mask,mask,mask))
             cv2.namedWindow('Object Mask', cv2.WINDOW_AUTOSIZE)
-            # print(stacked_mask.shape)
             cv2.imshow('Object Mask', mask*255)
             cv2.namedWindow('Object Color', cv2.WINDOW_AUTOSIZE)
-            # print(stacked_mask.shape)
             cv2.imshow('Object Color', color_image)
+            if save_path is not None:
+                video_writer.write(color_image)
+            key = cv2.waitKey(1)
+            if key & 0xFF == ord('q') or key == 27:
+                cv2.destroyAllWindows()
+                if save_path is not None:
+                    video_writer.release()
+                break
+        self.pipeline.stop()
+    def stream_tracked_objects(self,threshold,save_path=None):
+        self.pipeline.start()
+        if save_path is not None:
+                # fourcc = cv2.CV_FOURCC(*'XVID')  # cv2.VideoWriter_fourcc() does not exist
+                print(self.color_shape)
+                video_shape = (self.color_shape[1],self.color_shape[0])
+                video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'XVID'), 30, video_shape,True)
+        while True:
+            frames = self.pipeline.wait_for_frames()
+            frames = self.align.process(frames)
+            depth_frame = frames.get_depth_frame()
+            color_frame = frames.get_color_frame() 
+            if self.decimate_option:
+                depth_frame = self.decimate.process(depth_frame)
+                color_frame = self.decimate.process(color_frame)
+            depth_image = np.asanyarray(depth_frame.get_data())
+            color_image = np.asanyarray(color_frame.get_data())
+            color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
+            mask = (depth_image < (self.floor_plane_img-threshold))*(depth_image > 0)
+            mask = mask.astype(np.uint8)
+            rendered_color = self.frame_objects.process_frame(color_image,mask)
+            cv2.namedWindow('Objects', cv2.WINDOW_AUTOSIZE)
+            cv2.imshow('Objects', rendered_color)
             if save_path is not None:
                 video_writer.write(color_image)
             key = cv2.waitKey(1)

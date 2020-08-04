@@ -15,7 +15,8 @@ class frame_objects:
         self.area_diff_weight = area_diff_weight
         self.dist_diff_weight = dist_diff_weight
         self.min_area = min_area
-    def process_frame(color:np.ndarray,depth_mask:np.ndarray):
+        self.frame_count = 0
+    def process_frame(self,color:np.ndarray,depth_mask:np.ndarray):
         """ will find contours and match them to existing objects (if any)
 
         Args:
@@ -25,12 +26,13 @@ class frame_objects:
         Returns:
             [(np.ndarray)]: color image overlayed with object bounding boxes, centroids, and trajectories
         """             
-        im2, contours, hierarchy = cv2.findContours(depth_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        self.frame_count += 1
+        contours, hierarchy = cv2.findContours(depth_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if len(contours)>0:
             if len(self.objects) == 0:
-                self.objects = [img_object(cnt) for c in contours]
+                self.objects = [img_object(cnt,self.frame_count) for cnt in contours if cv2.moments(cnt)['m00']>self.min_area]
             else:
-                # todo: condition for clearing objects that have left the screen
+                contours = [cnt for cnt in contours if cv2.moments(cnt)['m00']>self.min_area]
                 distances  = np.zeros((len(contours),len(self.objects)))
                 for i,cnt in enumerate(contours):
                     for j,obj in enumerate(self.objects):
@@ -39,15 +41,17 @@ class frame_objects:
                 filtered_distances,kept_cnts,unmatched_cnts = self.filter_cnts(distances)
                 matched_objects = self.assign_contours(filtered_distances)
                 for cnt_index,obj_index in zip(kept_cnts,matched_objects):
-                    # if distances[cnt_index][obj_index] < SOME_DISTANCE:
-                    self.objects[obj_index].update(contours[cnt_index])
+                    if distances[cnt_index][obj_index] < 250:
+                        self.objects[obj_index].update(contours[cnt_index],self.frame_count)
                 for new_cnt_index in unmatched_cnts: 
                     new_cnt = contours[new_cnt_index]
-                    M = np2.moments(new_cnt)
+                    M = cv2.moments(new_cnt)
                     if M["m00"]>self.min_area:
-                        self.objects.append(img_object(new_cnt))
+                        self.objects.append(img_object(new_cnt,self.frame_count))
+        for i,obj in enumerate(self.objects):
+            if obj.last_frame+5<self.frame_count:
+                del self.objects[i]
         return self.render_color_output(color)
-    @staticmethod
     def render_color_output(self,color:np.ndarray):
         """ overlays bounding boxes and trajectories
 
@@ -96,12 +100,14 @@ class frame_objects:
                 arbitrated_minimum = np.where(cnts_to_arbitrate==np.amin(cnts_to_arbitrate))[0][0]
                 row_filter = [i for i in range(m.shape[0]) if i != arbitrated_minimum]
                 m[row_filter,r] = np.amax(m)+1
-                return assign_contours(m)
+                return cls.assign_contours(m)
     @staticmethod
     def filter_cnts(m):
         shape = m.shape
         if shape[0]==shape[1]:
-            return m
+            rows_kept = [i for i in range(shape[0])]
+            rows_deleted=[]
+            return m,rows_kept,rows_deleted
         else:
             rows_deleted = []
             while m.shape[0]>m.shape[1]:
@@ -117,28 +123,30 @@ class img_object:
     """
     tracks object atribues (contour,bbox,centroid,centroid_path)
     """    
-    def __init__(self,contour):
+    def __init__(self,contour,frame):
         self.contour = contour
-        self.path = []
-        self.process_contour(self.contour)
+        self.centroid,self.bbox,self.area = self.process_contour(self.contour)
+        self.path = [self.centroid]
+        self.last_frame = frame
     def process_contour(self,cnt):
         """
         takes contour and returns object bounding box and centroid
         """        
         bbox = cv2.boundingRect(cnt)
         M = cv2.moments(cnt)
-        area = M["m00"]
+        area = max(M["m00"],1)
         centroid = (int(M["m10"]/area),int(M["m01"]/area))
         return centroid,bbox,area
-    def update(self,contour)
+    def update(self,contour,frame):
         centroid,bbox,area = self.process_contour(contour)
+        self.last_frame=frame
         self.path.append(centroid)
         self.bbox = bbox
         self.area = area
         self.centroid = centroid
     def calculate_distance(self,candidate_contour):
         candidate_centroid,_,candidate_area = self.process_contour(candidate_contour)
-        centroid_dist = np.linalg.norm(self.centroid-candidate_centroid)
+        centroid_dist = np.linalg.norm(np.array(self.centroid)-np.array(candidate_centroid))
         area_percent_diff = abs((self.area-candidate_area)/self.area)
         return centroid_dist,area_percent_diff
     
