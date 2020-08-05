@@ -64,7 +64,6 @@ class LidarCamera:
         self.pipeline.start()
         if save_path is not None:
                 # fourcc = cv2.CV_FOURCC(*'XVID')  # cv2.VideoWriter_fourcc() does not exist
-                print(self.color_shape)
                 video_shape = (self.color_shape[1],self.color_shape[0])
                 video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'XVID'), 30,video_shape,True)
         while True:
@@ -98,7 +97,6 @@ class LidarCamera:
         self.pipeline.start()
         if save_path is not None:
                 # fourcc = cv2.CV_FOURCC(*'XVID')  # cv2.VideoWriter_fourcc() does not exist
-                print(self.color_shape)
                 video_shape = (self.color_shape[1],self.color_shape[0])
                 video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'XVID'), 30, video_shape,True)
         while True:

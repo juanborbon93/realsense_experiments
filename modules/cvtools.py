@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-
+from uuid import uuid4
 class frame_objects:
     """keeps track of objects as they move through frame
     """    
@@ -42,7 +42,7 @@ class frame_objects:
                 matched_objects = self.assign_contours(filtered_distances)
                 for cnt_index,obj_index in zip(kept_cnts,matched_objects):
                     if distances[cnt_index][obj_index] < 250:
-                        self.objects[obj_index].update(contours[cnt_index],self.frame_count)
+                        self.objects[obj_index].update(contours[cnt_index],self.frame_count,color)
                 for new_cnt_index in unmatched_cnts: 
                     new_cnt = contours[new_cnt_index]
                     M = cv2.moments(new_cnt)
@@ -50,6 +50,7 @@ class frame_objects:
                         self.objects.append(img_object(new_cnt,self.frame_count))
         for i,obj in enumerate(self.objects):
             if obj.last_frame+5<self.frame_count:
+                obj.save_best_crop()
                 del self.objects[i]
         return self.render_color_output(color)
     def render_color_output(self,color:np.ndarray):
@@ -60,20 +61,21 @@ class frame_objects:
 
         Returns:
             [(np.ndarray)]: rendered color image
-        """        
+        """  
+        color_copy = color.copy()      
         for obj in self.objects:
             drawing_color = (255,0,0)
             line_thickness = 2
             cv2.rectangle(
-                color, 
+                color_copy, 
                 (int(obj.bbox[0]), int(obj.bbox[1])), 
                 (int(obj.bbox[0]+obj.bbox[2]),int(obj.bbox[1]+obj.bbox[3])), 
                 drawing_color, line_thickness)
             path_length = len(obj.path)
             if path_length>2:
                 for i in range(1,path_length):
-                    cv2.line(color,obj.path[i-1],obj.path[i],drawing_color,line_thickness)
-        return color
+                    cv2.line(color_copy,obj.path[i-1],obj.path[i],drawing_color,line_thickness)
+        return color_copy
     @staticmethod
     def find_repeats(l):
         index_set = set()
@@ -123,11 +125,16 @@ class img_object:
     """
     tracks object atribues (contour,bbox,centroid,centroid_path)
     """    
-    def __init__(self,contour,frame):
+    def __init__(self,contour,frame,auto_capture=True):
         self.contour = contour
         self.centroid,self.bbox,self.area = self.process_contour(self.contour)
         self.path = [self.centroid]
         self.last_frame = frame
+        self.frame_size = (720, 1280)
+        self.frame_center = (int(self.frame_size[0]/2),int(self.frame_size[1]/2))
+        self.auto_capture = auto_capture
+        self.in_frame = False
+        self.captures = []
     def process_contour(self,cnt):
         """
         takes contour and returns object bounding box and centroid
@@ -137,13 +144,33 @@ class img_object:
         area = max(M["m00"],1)
         centroid = (int(M["m10"]/area),int(M["m01"]/area))
         return centroid,bbox,area
-    def update(self,contour,frame):
+    def update(self,contour,frame,color):
         centroid,bbox,area = self.process_contour(contour)
         self.last_frame=frame
         self.path.append(centroid)
         self.bbox = bbox
         self.area = area
         self.centroid = centroid
+        self.in_frame = self.is_fully_in_frame()
+        if self.auto_capture == True  and self.in_frame:
+            print('logging crop')
+            center_distance = np.linalg.norm(np.array(self.frame_center)-np.array(self.centroid))
+            crop = self.get_crop(color)
+            self.captures.append({'distance':center_distance,'crop':crop})
+    def save_best_crop(self):
+        if len(self.captures)>0:
+            best_crop = min(self.captures,key=lambda x: x['distance'])['crop']
+            cv2.imwrite(f'crops/{uuid4()}.jpg',best_crop)
+    def get_crop(self,color):
+        return color[self.bbox[1]:self.bbox[1]+self.bbox[3],self.bbox[0]:self.bbox[0]+self.bbox[2]]
+
+    def is_fully_in_frame(self):
+        is_in_frame = True
+        is_in_frame = is_in_frame and self.bbox[0]>10
+        is_in_frame = is_in_frame and self.bbox[1]>10
+        is_in_frame = is_in_frame and (self.bbox[0]+self.bbox[2]) < (self.frame_size[1]-10)
+        is_in_frame = is_in_frame and (self.bbox[1]+self.bbox[3]) < (self.frame_size[0]-10)
+        return is_in_frame
     def calculate_distance(self,candidate_contour):
         candidate_centroid,_,candidate_area = self.process_contour(candidate_contour)
         centroid_dist = np.linalg.norm(np.array(self.centroid)-np.array(candidate_centroid))
